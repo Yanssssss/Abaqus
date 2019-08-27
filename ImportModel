@@ -1,0 +1,21 @@
+# -*- coding:UTF-8 -*-
+from abaqusConstants import *
+from abaqus import *
+from caeModules import *
+
+
+#用于导入模型
+def import_model(model_file_name, rename):
+    modelname = mdb.models.keys()[0]
+    acis = mdb.openAcis('E:/Abaqus_Temp/Models/' + str(model_file_name) + '.SAT', scaleFromFile=OFF)
+    mdb.models[modelname].PartFromGeometryFile(name=rename, geometryFile=acis, combine=True, retainBoundary=True,
+                                               mergeSolidRegions=True, dimensionality=THREE_D, type=DEFORMABLE_BODY,
+                                               scale=0.001)
+    mdb.models.changeKey(fromName=modelname, toName=str(rename))  #改Model名字
+    print('Import model successful!')
+
+
+if __name__ == '__main__':
+    modelname, partname = getInputs((('Please input model file name:', ''),
+                                     ('Please input part name:', '')))
+    import_model(modelname, partname)
