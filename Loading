@@ -1,0 +1,18 @@
+# -*- coding:UTF-8 -*-
+from abaqusConstants import *
+from abaqus import *
+from caeModules import *
+'''Loading'''
+
+
+def point_loading():
+    modelname = mdb.models.keys()[0]
+    m = mdb.models[modelname]
+    steps_num = len(m.steps.keys())
+    if steps_num == 5:
+
+    elif steps_num == 1:
+        print('Please create steps before define loading.')
+    else:
+        print('number of Steps error.')
+    print('Define loading successful!')
