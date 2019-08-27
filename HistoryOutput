@@ -1,0 +1,19 @@
+# -*- coding:UTF-8 -*-
+from abaqusConstants import *
+from abaqus import *
+from caeModules import *
+
+
+def history_output():
+    modelname = mdb.models.keys()[0]
+    m = mdb.models[modelname]
+    instancename = m.rootAssembly.instances.keys()[0]
+    i = m.rootAssembly.instances[instancename]
+    sets = str(i.sets.keys())
+    num = int(getInput('Current sets:' + sets, ''))
+    setname = i.sets.keys()[num - 1]
+    region = i.sets[setname]
+    m.historyOutputRequests.changeKey(fromName='H-Output-1', toName='Displacement')
+    m.historyOutputRequests['Displacement'].setValues(variables=('U3', ), numIntervals=200, timeMarks=OFF,
+                                                         region=region, sectionPoints=DEFAULT, rebar=EXCLUDE)
+    print('Create history output successful!')
