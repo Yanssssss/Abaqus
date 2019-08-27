@@ -1,0 +1,54 @@
+# -*- coding:UTF-8 -*-
+from abaqusConstants import *
+from abaqus import *
+from material import createMaterialFromDataString  #定义材料需要
+
+
+def CreatingSMA(material_name, model, EA, EM, nu, alphaA, alphaM, Ms, Mf, As, Af, H, MrSoH, ArSoH, pre_temp):
+    modelname = mdb.models.keys()[0]
+    createMaterialFromDataString(modelname, material_name, '2017',
+                                 """{'specificHeat': {'temperatureDependency': OFF, 'table': ((329.0,),), 'dependencies': 0, 'law': CONSTANTVOLUME},
+                                     'materialIdentifier': '', 'description': '', 'name': 'SMA',
+                                      'density': {'temperatureDependency': OFF, 'table': ((6450.0,),), 'dependencies': 0, 'fieldName': '', 'distributionType': UNIFORM},
+                                       'depvar': {'deleteVar': 0, 'n': 100}, 
+                                       'userMaterial': {'thermalConstants': (), 'unsymm': OFF,
+                                        'mechanicalConstants': (1.0, 3.0, 1e-08, 0.0, 16.0, 70000000000.0, 30000000000.0, 0.33, 2.2e-05,
+                                                               2.2e-05, 291.0, 271.0, 295.0, 315.0, 0.05, -350000.0, -350000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+                                      'type': MECHANICAL}, 'conductivity': {'temperatureDependency': OFF, 'table': ((22.0,),), 'dependencies': 0, 'type': ISOTROPIC}}""")  # 从材料库导入
+    mdb.models[modelname].materials[material_name].userMaterial.setValues(
+        mechanicalConstants=(1.0, model, 1e-08, 0.0, 16.0, EA, EM, nu, alphaA, alphaM, Ms, Mf, As, Af, H, MrSoH, ArSoH,
+                             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0))
+    mdb.models[modelname].HomogeneousSolidSection(name=material_name, material=material_name, thickness=None)
+    if pre_temp != 0:
+        if pre_temp >= Af:
+            print(material_name + ':')
+            print('Ms:' + str((pre_temp - Ms) * -1 * MrSoH / H / 1000000) + 'MPa')
+            print('Mf:' + str((pre_temp - Mf) * -1 * MrSoH / H / 1000000) + 'MPa')
+            print('As:' + str((pre_temp - As) * -1 * ArSoH / H / 1000000) + 'MPa')
+            print('Af:' + str((pre_temp - Af) * -1 * ArSoH / H / 1000000) + 'MPa')
+        else:
+            print(material_name + ':')
+            print('Ms:' + str((pre_temp - Ms) * -1 * MrSoH / H / 1000000) + 'MPa')
+            print('Mf:' + str((pre_temp - Mf) * -1 * MrSoH / H / 1000000) + 'MPa')
+    else:
+        print('Create SMA successful!')
+
+'''
+    MODEL:本构模型： 1-指数模型， 2-多项式模型， 3-余弦模型
+    EA:奥氏体杨氏模量
+    EM:马氏体杨氏模量
+    nu:泊松比
+    alphaA:奥氏体热膨胀系数
+    alphaM:马氏体热膨胀系数
+    Ms:马氏体相变开始温度
+    Mf:马氏体相变结束温度
+    As:奥氏体相变开始温度
+    Af:奥氏体相变结束温度
+    H:最大相变应变
+    MrSo/H:马氏体应力影响系数:所受应力对相变温度的影响
+    ArSo/H:奥氏体应力影响系数:所受应力对相变温度的影响
+    '''
+
+
+
+
