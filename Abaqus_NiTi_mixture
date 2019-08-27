@@ -1,0 +1,458 @@
+# -*- coding:UTF-8 -*-
+from abaqusConstants import *
+from abaqus import *
+from material import createMaterialFromDataString  #定义材料需要
+from odbAccess import *  # 访问和处理输出数据库
+import math
+import regionToolset
+import mesh
+
+
+class NiTi:
+    '''实例属性介绍：
+        self._x：长方体的宽
+        self._y：长方体的长
+        self._z：长方体的高
+        self._name：model的名字
+        self._sections：存储创建的截面的名字
+        self._steps：存储步的名字
+        self.m：指向mdb.models[self._name]
+        self.p：指向part
+        self._offset:创建基准面的参数
+        self._n：传递z方向上的分块数
+        self._m：
+        self._k：
+        self.i：
+        self.j:创建的job对象
+        self.odb:
+    '''
+    def __init__(self, width, height, depth, name='NiTi'):
+        self._x = width
+        self._y = height
+        self._z = depth
+        self._name = name
+        self._sections = []  #存储截面，并读取
+        self._steps = []  #存储步
+
+    def modeling(self, part_name):
+        mdb.models.changeKey(fromName='Model-1', toName=self._name)  #改model名字
+        self.m = mdb.models[self._name]
+        s = self.m.ConstrainedSketch(name='SketchA', sheetSize=0.2)
+        s.rectangle(point1=(0.0, 0.0), point2=(self._x, self._y))
+        self.p = self.m.Part(name=part_name, dimensionality=THREE_D, type=DEFORMABLE_BODY)  #创建的Part
+        self.p.BaseSolidExtrude(sketch=s, depth=self._z)
+        del self.m.sketches['SketchA']  #删除草图
+
+    def set_datum_planes(self, offset):
+        self._offset = offset
+        f = self.p.faces
+        f1 = f.findAt((self._x/2.0, self._y/2.0, 0))  #NiTi柱的底面，即创建草图的面
+        f2 = f.findAt((self._x/2.0, 0, self._z/2.0))  #侧面
+        f3 = f.findAt((0, self._y/2.0, self._z/2.0))  #侧面
+        self._n = int(math.ceil(self._z/offset))  #向上取整
+        self._m = int(math.ceil(self._x/offset))  #设为实例属性是为了传递给后面的assign sections方法
+        self._k = int(math.ceil(self._y/offset))
+
+        '''The DatumPlane object has no direct constructor; it is created when a Feature object is created. For example,
+         the DatumPlaneByPrincipalPlane method creates a Feature object that creates a DatumPlane object.
+        The DatumPlane object is derived from the Datum object.'''
+
+        for i in range(self._n-1):  #n-1次
+            self.p.DatumPlaneByOffset(plane=f1, flip=SIDE2, offset=offset + i * offset)
+            i += 1
+        for i in range(self._m-1):
+            self.p.DatumPlaneByOffset(plane=f3, flip=SIDE2, offset=offset + i * offset)
+            i += 1
+        for i in range(self._k-1):
+            self.p.DatumPlaneByOffset(plane=f2, flip=SIDE2, offset=offset + i * offset)
+            i += 1
+
+    def partition_cell(self):
+        d = self.p.datums  #字典，不能迭代
+        for i in d.keys():
+            picked_cells = self.p.cells  #得到全部cells，用来分割
+            self.p.PartitionCellByDatumPlane(datumPlane=d[i], cells=picked_cells)  #别在分割后删掉基准面，删基准面会删点分割的cells
+
+    def creating_materials(self, material_name, material_data, pre_temp):
+        createMaterialFromDataString(self._name, material_name, '2017',
+            """{'specificHeat': {'temperatureDependency': OFF, 'table': ((329.0,),), 'dependencies': 0, 'law': CONSTANTVOLUME},
+                'materialIdentifier': '', 'description': '', 'name': 'SMA',
+                 'density': {'temperatureDependency': OFF, 'table': ((6450.0,),), 'dependencies': 0, 'fieldName': '', 'distributionType': UNIFORM},
+                  'depvar': {'deleteVar': 0, 'n': 100}, 
+                  'userMaterial': {'thermalConstants': (), 'unsymm': OFF,
+                   'mechanicalConstants': (1.0, 3.0, 1e-08, 0.0, 16.0, 70000000000.0, 30000000000.0, 0.33, 2.2e-05,
+                                          2.2e-05, 291.0, 271.0, 295.0, 315.0, 0.05, -350000.0, -350000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+                 'type': MECHANICAL}, 'conductivity': {'temperatureDependency': OFF, 'table': ((22.0,),), 'dependencies': 0, 'type': ISOTROPIC}}""")  #从材料库导入
+        self.m.materials[material_name].userMaterial.setValues(
+            mechanicalConstants=(1.0, material_data['MODEL'], 1e-08, 0.0, 16.0, material_data['EA'],
+                                 material_data['EM'], material_data['nu'], material_data['alphaA'],
+                                 material_data['alphaM'], material_data['Ms'], material_data['Mf'],
+                                 material_data['As'], material_data['Af'], material_data['H'],
+                                 material_data['MrSo/H'], material_data['ArSo/H'], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0))
+        print(material_name + ':')
+        print('Ms:' + str((pre_temp - material_data['Ms']) * -1 * material_data['MrSo/H'] / material_data['H'] / 1000000) + 'MPa')
+        print('Mf:' + str((pre_temp - material_data['Mf']) * -1 * material_data['MrSo/H'] / material_data['H'] / 1000000) + 'MPa')
+        print('As:' + str((pre_temp - material_data['As']) * -1 * material_data['ArSo/H'] / material_data['H'] / 1000000) + 'MPa')
+        print('Af:' + str((pre_temp - material_data['Af']) * -1 * material_data['ArSo/H'] / material_data['H'] / 1000000) + 'MPa')
+
+    def creating_sections(self, chosen_material, section_name):
+        self.m.HomogeneousSolidSection(name=section_name, material=chosen_material, thickness=None)  #构造方法
+        self._sections.append(section_name)
+
+    def assign_sections(self):
+        for k in range(self._k):  #k次，y方向上的cell数
+            for j in range(self._m):  #m次，x方向上的cell数
+                for i in range(self._n):  #n次，z方向上的cell数
+                    x = self._offset/2.0 + j * self._offset  #x方向上的坐标增量
+                    y = self._offset/2.0 + k * self._offset
+                    z = self._offset/2.0 + i * self._offset
+                    if (i + j + k) % 2 == 0:  #判断：相邻的cell赋予不同的截面属性即材料属性
+                        cell = self.p.cells.findAt(((x, y, z),),)
+                        if i + j + k == 0:
+                            cells1 = cell
+                        else:
+                            cells1 += cell
+                    else:
+                        cell = self.p.cells.findAt(((x, y, z),), )
+                        if k == 0 and j == 0 and i == 1:
+                            cells2 = cell
+                        else:
+                            cells2 += cell
+        self.p.Set(cells=cells1, name='material1_region')
+        self.p.Set(cells=cells2, name='material2_region')
+        region1 = self.p.sets['material1_region']
+        region2 = self.p.sets['material2_region']
+        self.p.SectionAssignment(region=region1, sectionName=self._sections[0], offset=0.0,  # 一个一个赋值
+                         offsetType=MIDDLE_SURFACE, offsetField='',
+                         thicknessAssignment=FROM_SECTION)
+        self.p.SectionAssignment(region=region2, sectionName=self._sections[1], offset=0.0,
+                         offsetType=MIDDLE_SURFACE, offsetField='',
+                         thicknessAssignment=FROM_SECTION)
+        print('Number of cell:' + str(self._k*self._m*self._n))
+
+    def creating_instance(self, instance_name):
+        mdb.models['NiTi'].rootAssembly.DatumCsysByDefault(CARTESIAN)  #笛卡尔坐标
+        self.i = mdb.models['NiTi'].rootAssembly.Instance(name=instance_name, part=self.p, dependent=ON)  #创建实例
+
+    def creating_step(self, step_name):
+        #判断，第一步位于初始步之后，其他的位于最后创建的步之后
+        if len(self._steps) == 0:
+            mdb.models['NiTi'].StaticStep(name=step_name, previous='Initial',
+                                          maxNumInc=100000, initialInc=0.01, minInc=1e-15, maxInc=0.01, nlgeom=ON)
+            self._steps.append(step_name)
+        else:
+            mdb.models['NiTi'].StaticStep(name=step_name, previous=self._steps[-1],
+                                          maxNumInc=100000, initialInc=0.01, minInc=1e-15, maxInc=0.01, nlgeom=ON)
+            self._steps.append(step_name)
+
+    def boundary_condition(self, temp):
+        '''定义固定约束'''
+        '''选择节点的方法：（换成选面）
+        for k in range(self._k+1):  #k+1次，y方向
+            for j in range(self._m+1):  #m+1次，x方向
+                x = j * self._offset  # x方向上的坐标增量
+                y = k * self._offset
+                z = 0.0
+                vertex = self.p.vertices.findAt(((x, y, z),), )
+                if k + j == 0:
+                    vertices = vertex   #第一次，定义vertices
+                else:
+                    vertices += vertex  #相加得到sequence
+        self.p.Set(vertices=vertices, name='BC')
+        bcset = self.i.sets['BC']
+        self.m.EncastreBC(name='BC', createStepName='Initial',
+                                      region=bcset, localCsys=None)'''
+        for k in range(self._k):  # k次，y方向上的face数
+            for j in range(self._m):  # m次，x方向上的face数
+                x = self._offset / 2.0 + j * self._offset  # x方向上的坐标增量
+                y = self._offset / 2.0 + k * self._offset
+                z = 0.0
+                face = self.p.faces.findAt(((x, y, z),), )
+
+                if k + j == 0:
+                    faces = face  # 第一次定义faces
+                else:                                     #有BUG，当划分不规则时有可能选不到某几个面
+                    faces += face  # 相加得到sequence
+        vertex_fixed = self.p.vertices.findAt(((0, 0, 0),), )
+        vertex_x = self.p.vertices.findAt(((self._x, 0, 0),), )
+        vertex_y = self.p.vertices.findAt(((0, self._y, 0),), )
+        self.p.Set(faces=faces, name='BC')
+        self.p.Set(vertices=vertex_fixed, name='BC_fixed')
+        self.p.Set(vertices=vertex_x, name='BC_xfree')
+        self.p.Set(vertices=vertex_y, name='BC_yfree')
+        bcset = self.i.sets['BC']
+        bcf = self.i.sets['BC_fixed']
+        bcx = self.i.sets['BC_xfree']
+        bcy = self.i.sets['BC_yfree']
+        self.m.DisplacementBC(name='BC', createStepName='Initial',
+                              region=bcset, u1=UNSET, u2=UNSET, u3=SET, ur1=UNSET, ur2=UNSET,
+                              ur3=UNSET, amplitude=UNSET, distributionType=UNIFORM,
+                              fieldName='', localCsys=None)
+        self.m.DisplacementBC(name='BC_fixed', createStepName='Initial',
+                              region=bcf, u1=SET, u2=SET, u3=UNSET, ur1=UNSET, ur2=UNSET,
+                              ur3=UNSET, amplitude=UNSET, distributionType=UNIFORM,
+                              fieldName='', localCsys=None)
+        self.m.DisplacementBC(name='BC_xfree', createStepName='Initial',
+                              region=bcx, u1=UNSET, u2=SET, u3=UNSET, ur1=UNSET, ur2=UNSET,
+                              ur3=UNSET, amplitude=UNSET, distributionType=UNIFORM,
+                              fieldName='', localCsys=None)
+        self.m.DisplacementBC(name='BC_yfree', createStepName='Initial',
+                              region=bcy, u1=SET, u2=UNSET, u3=UNSET, ur1=UNSET, ur2=UNSET,
+                              ur3=UNSET, amplitude=UNSET, fixed=OFF, distributionType=UNIFORM,
+                              fieldName='', localCsys=None)
+        '''约束3个节点
+        vertex_fixed = self.p.vertices.findAt(((0, 0, 0),), )
+        region_fixed = regionToolset.Region(vertices=vertex_fixed)
+        self.m.DisplacementBC(name='BCfixed', createStepName='Initial',
+                              region=region_fixed, u1=0.0, u2=0.0, u3=0.0, ur1=UNSET, ur2=UNSET,
+                              ur3=UNSET, amplitude=UNSET, fixed=OFF, distributionType=UNIFORM,
+                              fieldName='', localCsys=None)
+        vertex_x = self.p.vertices.findAt(((self._x, 0, 0),), )
+        region_x = regionToolset.Region(vertices=vertex_x)
+        self.m.DisplacementBC(name='BCx', createStepName='Initial',
+                              region=region_x, u1=UNSET, u2=0.0, u3=0.0, ur1=UNSET, ur2=UNSET,
+                              ur3=UNSET, amplitude=UNSET, fixed=OFF, distributionType=UNIFORM,
+                              fieldName='', localCsys=None)
+        vertex_y = self.p.vertices.findAt(((0, self._y, 0),), )
+        region_y = regionToolset.Region(vertices=vertex_y)
+        self.m.DisplacementBC(name='BCy', createStepName='Initial',
+                              region=region_y, u1=0.0, u2=UNSET, u3=0.0, ur1=UNSET, ur2=UNSET,
+                              ur3=UNSET, amplitude=UNSET, fixed=OFF, distributionType=UNIFORM,
+                              fieldName='', localCsys=None)'''
+        '''预定义温度场'''
+        c, f, e, v = self.i.cells, self.i.faces, self.i.edges, self.i.vertices
+        region = regionToolset.Region(vertices=v, edges=e, faces=f, cells=c)
+        self.m.Temperature(name='Pre Temperature',
+                                       createStepName='Initial', region=region, distributionType=UNIFORM,
+                                       crossSectionDistribution=CONSTANT_THROUGH_THICKNESS, magnitudes=(temp,))
+
+    def load_case(self, loading, step1, amplitude, displacement):
+        '''加载和卸载'''
+        '''施加力在节点：（换成平面的位移）
+        for k in range(self._k+1):  #k+1次，y方向上的cell数
+            for j in range(self._m+1):  #m+1次，x方向上的cell数
+                x = j * self._offset  # x方向上的坐标增量
+                y = k * self._offset
+                z = self._z
+                vertex = self.p.vertices.findAt(((x, y, z),), )
+                if k + j == 0:
+                    vertices = vertex   #第一次，定义vertices
+                else:
+                    vertices += vertex  #相加得到sequence
+        self.p.Set(vertices=vertices, name='LOAD')
+        loadset = self.i.sets['LOAD']
+        self.m.ConcentratedForce(name='Loading', createStepName=step1,
+                                             region=loadset, cf3=loading/((self._k+1)*(self._m+1)), distributionType=UNIFORM, field='',
+                                             localCsys=None)
+        self.m.loads['Loading'].deactivate(step2)'''
+        for k in range(self._k):  # k次，y方向上的face数
+            for j in range(self._m):  # m次，x方向上的face数
+                x = self._offset / 2.0 + j * self._offset  # x方向上的坐标增量
+                y = self._offset / 2.0 + k * self._offset
+                z = self._z
+                face = self.p.faces.findAt(((x, y, z),), )
+                if k + j == 0:
+                    faces = face  # 第一次，定义faces
+                else:
+                    faces += face  # 相加得到sequence
+        self.p.Set(faces=faces, name='LOAD')
+        loadset = self.i.sets['LOAD']
+        self.m.DisplacementBC(name='loading', createStepName=step1,
+                              region=loadset, u1=UNSET, u2=UNSET, u3=loading, ur1=UNSET, ur2=UNSET,
+                              ur3=UNSET, amplitude=UNSET, fixed=OFF, distributionType=UNIFORM,
+                              fieldName='', localCsys=None)
+        self.m.TabularAmplitude(name=amplitude, timeSpan=TOTAL,
+                                smooth=SOLVER_DEFAULT, data=((0.0, 0.0), (1.0, 1.0), (2.0, 0.0)))
+        self.m.boundaryConditions['loading'].setValues(amplitude=amplitude)
+        session.XYData(name=amplitude, data=((0.0, 0.0), (1.0, 1.0), (2.0, 0.0)),
+                       sourceDescription='Data from amplitudes table option')
+        xy = displacement * session.xyDataObjects[amplitude]  # displacement
+        xy.setValues(sourceDescription='Displacement')
+        tmpName = xy.name
+        session.xyDataObjects.changeKey(tmpName, 'Displacement')
+        del session.xyDataObjects[amplitude]
+        #self.m.boundaryConditions['loading'].deactivate(step2)
+        print('Nominal strain:' + str(loading/self._z))
+
+    def history_output(self, step1):
+        '''固定约束端的支反力'''
+        region1 = self.i.sets['BC']
+        self.m.historyOutputRequests.changeKey(fromName='H-Output-1', toName='Reaction Forces')
+        self.m.historyOutputRequests['Reaction Forces'].setValues(variables=(
+            'RT',), region=region1, sectionPoints=DEFAULT, rebar=EXCLUDE, numIntervals=500)
+        '''位移加载端的节点的位移
+        region2 = self.i.sets['LOAD']
+        self.m.HistoryOutputRequest(name='Displacement',
+                                    createStepName=step1, variables=('UT',), numIntervals=500,
+                                    region=region2, sectionPoints=DEFAULT, rebar=EXCLUDE)'''
+
+    def set_mesh(self, size):
+        self.p.seedPart(size=size, deviationFactor=0.1, minSizeFactor=0.5)  #控制单元全局尺寸，minSizeFactor：网格最小尺寸×size
+        pickedregions = self.p.cells
+        self.p.setMeshControls(regions=pickedregions, technique=STRUCTURED)  #dependent=ON,在part上划分网格
+        c3d20r = mesh.ElemType(elemCode=C3D20R, elemLibrary=STANDARD)
+        c3d15 = mesh.ElemType(elemCode=C3D15, elemLibrary=STANDARD)
+        c3d10 = mesh.ElemType(elemCode=C3D10, elemLibrary=STANDARD)
+        pickedregions = (self.p.cells, )  #regions参数需要Set object
+        self.p.setElementType(regions=pickedregions, elemTypes=(c3d20r, c3d15, c3d10))  #Set object
+        self.p.generateMesh()
+
+    def creating_job(self, job_name, userSubroutine):
+        self.j = mdb.Job(name=job_name, model=self._name, description='', type=ANALYSIS, atTime=None,
+                waitMinutes=0, waitHours=0, queue=None, memory=90, memoryUnits=PERCENTAGE,
+                getMemoryFromAnalysis=True, explicitPrecision=SINGLE,
+                nodalOutputPrecision=SINGLE, echoPrint=OFF, modelPrint=OFF,
+                contactPrint=OFF, historyPrint=OFF,
+                userSubroutine=userSubroutine, scratch='',
+                resultsFormat=ODB, multiprocessingMode=DEFAULT, numCpus=1, numGPUs=0)
+
+    def postprocessing(self, file_name, instance_name):
+        '''读取结果文件，画应力应变曲线'''
+        self.odb = session.openOdb(name='E:/Abaqus_Temp/' + file_name + '.odb', readOnly=False)  #以可读写方式打开odb文件
+        '''行不通
+        a = 0
+        b = 0
+        hr1 = self.odb.steps['loading'].historyRegions  #loading step
+        hr2 = self.odb.steps['unloading'].historyRegions  #unloading step
+        for i in hr1.keys():
+            if a == 0:
+                RF3_loading = hr1[i].historyOutputs['RF3']
+            else:
+                RF3_loading += hr1[i].historyOutputs['RF3']
+            a += 1
+        for i in hr2.keys():
+            if b == 0:
+                RF3_unloading = hr1[i].historyOutputs['RF3']
+            else:
+                RF3_unloading += hr1[i].historyOutputs['RF3']
+            b += 1'''
+        bc = self.odb.rootAssembly.instances[instance_name.upper()].nodeSets['BC'].nodes
+        non = len(bc)
+        name_list = []
+        print('Number of node:' + str(non))
+        for node in bc:  #读取节点的编号，并创建相应的XY图
+            label = node.label
+            name = 'N: ' + str(label)
+            session.XYDataFromHistory(name=name, odb=self.odb,
+                                      outputVariableName='Reaction force: RF3 at Node ' + str(label) + ' in NSET BC',
+                                      steps=('loading', 'unloading',), __linkedVpName__='Viewport: 1')
+            name_list.append(name)
+        if non == len(name_list):  #判断参与运算的节点数量是否与总节点数相等
+            print('Successful')
+        else:
+            print('Error')
+        for name in name_list:  #BC节点的支反力相加，得到总反力
+            xy_current = session.xyDataObjects[name]
+            if name == name_list[0]:
+                xy = xy_current
+            else:
+                xy += xy_current
+        xy = abs(xy)
+        xy.setValues(sourceDescription='BC nodes')
+        tmpName = xy.name  #临时变量名，例如：_temp_1
+        session.xyDataObjects.changeKey(tmpName, 'Total reaction force')  #创建总支反力
+        for name in name_list:  #删除之前创建的节点XY图
+            del session.xyDataObjects[name]
+        xy = session.xyDataObjects['Displacement'] / self._z  #名义应变
+        xy.setValues(sourceDescription='Displacement / depth')
+        tmpName = xy.name
+        session.xyDataObjects.changeKey(tmpName, 'Nominal strain')
+        xy = session.xyDataObjects['Total reaction force'] / (self._x * self._y)  #名义应力
+        xy.setValues(sourceDescription='Total reaction force / (width * height)')
+        tmpName = xy.name
+        session.xyDataObjects.changeKey(tmpName, 'Nominal stress')
+        xy = log(1 + session.xyDataObjects['Nominal strain'])  #真实应变：ln(1 + 名义应变）
+        xy.setValues(sourceDescription='log ( 1 + Nominal strain )')
+        tmpName = xy.name
+        session.xyDataObjects.changeKey(tmpName, 'True strain')
+        xy = session.xyDataObjects['Nominal stress'] * (1 + session.xyDataObjects['Nominal strain'])  #真实应力：名义应力*（1 + 名义应变）
+        xy.setValues(sourceDescription='Nominal stress * (1 + Nominal strain)')
+        tmpName = xy.name
+        session.xyDataObjects.changeKey(tmpName, 'True stress')
+        xy = combine(session.xyDataObjects['Displacement'], session.xyDataObjects['Total reaction force'])  #位移—力曲线
+        xy.setValues(sourceDescription='combine ( Displacement, Total reaction force )')
+        tmpName = xy.name
+        session.xyDataObjects.changeKey(tmpName, 'Displacement_Force')
+        xy = combine(session.xyDataObjects['Nominal strain'], session.xyDataObjects['Nominal stress'])  #名义应变—应力曲线
+        xy.setValues(sourceDescription='combine ( Nominal strain, Nominal stress )')
+        tmpName = xy.name
+        session.xyDataObjects.changeKey(tmpName, 'Nominal strain_stress')
+        xy = combine(session.xyDataObjects['True strain'], session.xyDataObjects['True stress'])  #真实应变—应力曲线
+        xy.setValues(sourceDescription='combine ( True strain, True stress )')
+        tmpName = xy.name
+        session.xyDataObjects.changeKey(tmpName, 'True strain_stress')
+        '''保存曲线到odb
+        xys = session.xyDataObjects
+        for name in xys.keys():
+            xy = xys[name]
+            self.odb.userData.XYData(name, xy)
+            self.odb.save()'''
+
+
+if __name__ == '__main__':
+    data = {'width': 0.01, 'height': 0.01, 'depth': 0.2, 'offset': 0.0025, 'part name': 'NiTi_column',
+            'instance name': 'NiTi_column', 'step name1': 'loading', 'step name2': 'unloading',
+            'material1': 'SMA1', 'material2': 'SMA2', 'section1': 'NiTinol1', 'section2': 'NiTinol2',
+            'predefined temperature': 350.0, 'loading：displacement': 0.02, 'mesh size': 0.0025, 'userSubroutine': 'E:\\Abaqus_Temp\\UMAT\\sma_um.for',
+            'job name': 'NiTi_Tension', 'job label': 1, 'amplitude_name': 'Amp'}
+    material_data1 = {'MODEL': 3, 'EA': 70000000000.0, 'EM': 30000000000.0, 'nu': 0.33, 'alphaA': 2.2e-05, 'alphaM': 2.2e-05,
+                      'Ms': 301.0, 'Mf': 281.0, 'As': 305.0, 'Af': 325.0, 'H': 0.05, 'MrSo/H': -350000.0, 'ArSo/H': -350000.0}
+    material_data2 = {'MODEL': 3, 'EA': 70000000000.0, 'EM': 30000000000.0, 'nu': 0.33, 'alphaA': 2.2e-05, 'alphaM': 2.2e-05,
+                      'Ms': 271.0, 'Mf': 251.0, 'As': 275.0, 'Af': 295.0, 'H': 0.05, 'MrSo/H': -350000.0, 'ArSo/H': -350000.0}
+    cae_file_name = str(data['part name']) + 'displacement' + str(data['loading：displacement']) + 'offset' + str(data['offset'])
+    odb_file_name = str(data['job name']) + str(data['job label'])
+    '''
+    MODEL:本构模型： 1-指数模型， 2-多项式模型， 3-余弦模型
+    EA:奥氏体杨氏模量
+    EM:马氏体杨氏模量
+    nu:泊松比
+    alphaA:奥氏体热膨胀系数
+    alphaM:马氏体热膨胀系数
+    Ms:马氏体相变开始温度
+    Mf:马氏体相变结束温度
+    As:奥氏体相变开始温度
+    Af:奥氏体相变结束温度
+    H:最大相变应变
+    MrSo/H:马氏体应力影响系数:所受应力对相变温度的影响
+    ArSo/H:奥氏体应力影响系数:所受应力对相变温度的影响
+    '''
+    if data['offset'] < data['mesh size']:
+        print('Please modify value of offset or mesh size!')
+    else:
+        ys = NiTi(data['width'], data['height'], data['depth'])
+        ys.modeling(data['part name'])
+        ys.set_datum_planes(data['offset'])
+        ys.partition_cell()
+        ys.creating_materials(data['material1'], material_data1, data['predefined temperature'])
+        ys.creating_materials(data['material2'], material_data2, data['predefined temperature'])
+        ys.creating_sections(data['material1'], data['section1'])
+        ys.creating_sections(data['material2'], data['section2'])
+        ys.assign_sections()
+        ys.creating_instance(data['instance name'])
+        ys.creating_step(data['step name1'])
+        ys.creating_step(data['step name2'])
+        ys.boundary_condition(data['predefined temperature'])
+        ys.load_case(data['loading：displacement'], data['step name1'], data['amplitude_name'], data['loading：displacement'])
+        ys.history_output(data['step name1'])
+        ys.set_mesh(data['mesh size'])
+        ys.creating_job(odb_file_name, data['userSubroutine'])
+        mdb.saveAs(pathName='E:/Abaqus_Temp/' + cae_file_name)
+        ys.j.submit(consistencyChecking=ON)
+        ys.j.waitForCompletion()
+        '''
+        try:
+            session.odbs['E:/Abaqus_Temp/' + odb_file_name + '.odb'].close()
+        except KeyError:
+            print('Unknown error, passed.')'''
+        ys.postprocessing(odb_file_name, data['instance name'])
+        print('Finished, please save xydata to odb file.')
+
+
+
+
+
+
+
+
+
+
