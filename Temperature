@@ -1,0 +1,27 @@
+# -*- coding:UTF-8 -*-
+from abaqusConstants import *
+from abaqus import *
+from caeModules import *
+'''预定义温度场'''
+
+
+def temperature(initial, heating, cooling):
+    modelname = mdb.models.keys()[0]
+    m = mdb.models[modelname]
+    steps_num = len(m.steps.keys())
+    if steps_num == 5:
+        ra = mdb.models[modelname].rootAssembly
+        i = ra.instances[ra.instances.keys()[0]]
+        c, f, e, v = i.cells, i.faces, i.edges, i.vertices
+        region = regionToolset.Region(vertices=v, edges=e, faces=f, cells=c)
+        m.Temperature(name='Temperature',
+                      createStepName='Initial', region=region, distributionType=UNIFORM,
+                      crossSectionDistribution=CONSTANT_THROUGH_THICKNESS, magnitudes=(initial,))
+        m.predefinedFields['Temperature'].setValuesInStep(stepName='Heating', magnitudes=(heating,))
+        m.predefinedFields['Temperature'].setValuesInStep(stepName='Cooling', magnitudes=(cooling,))
+    elif steps_num == 1:
+        print('Please create steps before define temperature.')
+    else:
+        print('number of Steps error.')
+    print('Define Temperature successful!')
+
