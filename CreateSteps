@@ -1,0 +1,16 @@
+from abaqusConstants import *
+from abaqus import *
+
+'''Loading, Unloading, Heating, Cooling'''
+def create_steps():
+    modelname = mdb.models.keys()[0]
+    m = mdb.models[modelname]
+    m.StaticStep(name='Loading', previous='Initial',
+                 maxNumInc=1000000, initialInc=0.01, minInc=1e-15, maxInc=0.01, nlgeom=ON)
+    m.StaticStep(name='Unloading', previous='Loading',
+                 maxNumInc=1000000, initialInc=0.01, minInc=1e-15, maxInc=0.01)
+    m.StaticStep(name='Heating', previous='Unloading',
+                 maxNumInc=1000000, initialInc=0.01, minInc=1e-15, maxInc=0.01)
+    m.StaticStep(name='Cooling', previous='Heating',
+                 maxNumInc=1000000, initialInc=0.01, minInc=1e-15, maxInc=0.01)
+    print('Create steps successful!')
