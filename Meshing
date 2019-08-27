@@ -1,0 +1,32 @@
+# -*- coding:UTF-8 -*-
+from abaqusConstants import *
+from abaqus import *
+from caeModules import *
+import mesh
+#倒数第二步使用：创建Job前
+
+
+def meshing(size, model):
+    if model == 1:
+        model = MEDIAL_AXIS
+    else:
+        model = ADVANCING_FRONT
+    modelname = mdb.models.keys()[0]
+    m = mdb.models[modelname]
+    partname = m.parts.keys()[0]
+    p = m.parts[partname]
+    p.seedPart(size=size, deviationFactor=0.1, minSizeFactor=0.1)  #网格尺寸
+    pe = (p.sets['PE'].cells,)
+    sme = (p.sets['SME'].cells,)
+    p.setMeshControls(regions=pe[0], elemShape=HEX, technique=SWEEP, algorithm=model)  #网格划分方式
+    p.setMeshControls(regions=sme[0], elemShape=TET, technique=FREE)
+    c3d8i = mesh.ElemType(elemCode=C3D8I, elemLibrary=STANDARD,
+                              secondOrderAccuracy=OFF, distortionControl=DEFAULT)
+    c3d6 = mesh.ElemType(elemCode=C3D6, elemLibrary=STANDARD)
+    c3d4 = mesh.ElemType(elemCode=C3D4, elemLibrary=STANDARD)
+    p.setElementType(regions=pe, elemTypes=(c3d8i, c3d6, c3d4))
+    c3d20r = mesh.ElemType(elemCode=C3D20R, elemLibrary=STANDARD)
+    c3d15 = mesh.ElemType(elemCode=C3D15, elemLibrary=STANDARD)
+    c3d10m = mesh.ElemType(elemCode=C3D10M, elemLibrary=STANDARD)
+    p.setElementType(regions=sme, elemTypes=(c3d20r, c3d15, c3d10m))
+    p.generateMesh()
